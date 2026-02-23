@@ -40,6 +40,7 @@ ENV/
 # Database
 *.db
 *.sqlite3
+pgdata/
 
 # OS
 .DS_Store
@@ -60,3 +61,8 @@ htmlcov/
 # Distribution
 *.tar.gz
 *.whl
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env

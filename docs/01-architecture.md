@@ -1,92 +1,163 @@
-# 01 — Architecture
+# 01 — Architecture (v2)
+
+> **v2 재설계: 2026-02-15**
+> Web UI 추가, LLM 성능 최우선, 학교/옵시디언 통합 레이어 신설.
 
 ## 기술 스택
 
-### MVP (Phase 1) — 개강 전 목표
+### Phase 1~2 (Core + 생활 관리)
 
 | 레이어 | 기술 | 선택 이유 |
 |--------|------|-----------|
-| 채널 (입력) | **Telegram Bot** (python-telegram-bot) | 설치 5분, 모바일 입력 최적, 푸시 알림 내장 |
-| API 서버 | **FastAPI** | 비동기, 자동 문서화, Python 생태계 |
-| DB (SSOT) | **SQLite + SQLAlchemy** | 로컬 파일 하나로 동작, 스키마는 Postgres 호환 설계 |
-| LLM | **OpenAI API (gpt-4o-mini)** | inbox 파싱 전용, 1건당 ~$0.001, 구조화 출력 강제 가능 |
-| 스케줄러 | **APScheduler** | 리마인더, enforcement 체크, 일정 주기 작업 |
-| 배포 | **VPS 1대** (또는 로컬) | Docker Compose로 단일 서비스 |
+| Frontend | **React (Vite) + Tailwind + shadcn/ui** | LLM 서비스 같은 모던 UI, 챗 + 대시보드 |
+| API 서버 | **FastAPI + WebSocket** | 비동기, 실시간 알림, 자동 문서화 |
+| DB (SSOT) | **Postgres + SQLAlchemy** | Docker, JSONB, TIMESTAMPTZ, pgvector 확장 가능 |
+| LLM (파싱) | **gpt-4o-mini** | 빠른 구조화 출력, 고빈도 호출에 최적 |
+| LLM (추론) | **Claude 3.5 Sonnet** | 컨텍스트 이해, 작업 분해, 정보 정리. 성능 최우선 |
+| 스케줄러 | **APScheduler** | 리마인더, enforcement 체크, 주기적 수집 |
+| 배포 | **VPS + Docker Compose** | 24/7 가동, 멀티 디바이스 브라우저 접속 |
 
-### Phase 2 이후 — 확장 시
+### Phase 3 이후 (학교 연동 + 심화)
 
 | 레이어 | 기술 | 전환 시점 |
 |--------|------|-----------|
-| DB | **Postgres** | SQLAlchemy 덕분에 거의 무비용 마이그레이션 |
-| 벡터 검색 | **pgvector** | 강의자료/메일/노트 RAG 검색 필요 시 |
-| 캐시/큐 | **Redis** | 세션 상태, 리마인더 큐, 쿨다운 관리 |
-| 오케스트레이션 | **LangGraph** | 멀티스텝 승인 워크플로우 필요 시 |
-| 관측 | **Langfuse** | 플랜 추적, 실패 분석, 평가 루프 |
-| 멀티채널 | **채널 어댑터 레이어** | Telegram + Discord + ... |
+| 학교 연동 | **Playwright (브라우저 자동화)** | e-Class, nDRIMS 스크래핑 |
+| 벡터 검색 | **pgvector** | `CREATE EXTENSION vector` — Postgres 확장 |
+| 알림 (보조) | **Telegram Bot** | 모바일 푸시 알림 (웹 밖에서도) |
+| 캐시/큐 | **Redis** | 세션, 리마인더 큐 필요 시 |
+| 관측 | **Langfuse** | LLM 호출 추적, 성능 분석 |
 
 ---
 
-## MVP 아키텍처 다이어그램
+## 아키텍처 다이어그램
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        User (Mobile)                         │
-│                     Telegram 1줄 입력                        │
-└──────────────┬───────────────────────────────────────────────┘
-               │
-               ▼
-┌──────────────────────────┐
-│   Telegram Bot Gateway   │  python-telegram-bot
-│   (Channel Adapter)      │  - 메시지 수신/발신
-│                          │  - 푸시 알림
-└──────────┬───────────────┘
-           │ HTTP
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                     FastAPI Backend                           │
-│                                                              │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
-│  │ Inbox       │  │ Prioritizer  │  │ Today Planner       │ │
-│  │ Service     │  │ Service      │  │ Service             │ │
-│  │             │  │              │  │                     │ │
-│  │ LLM 호출    │  │ 순수 함수    │  │ 순수 함수            │ │
-│  │ (파싱 전용)  │  │ (결정론적)   │  │ (결정론적)           │ │
-│  └──────┬──────┘  └──────┬───────┘  └──────────┬──────────┘ │
-│         │               │                      │            │
-│  ┌──────┴───────────────┴──────────────────────┴──────────┐ │
-│  │                    Enforcement Service                  │ │
-│  │  - 미이행 감지                                          │ │
-│  │  - next_action 축소                                     │ │
-│  │  - 자동 재분해/재계획                                    │ │
-│  └────────────────────────┬───────────────────────────────┘ │
-│                           │                                  │
-│  ┌────────────────────────┴───────────────────────────────┐ │
-│  │              Tool Executor (Allowlisted)                │ │
-│  │  - Google Calendar 연동 (Phase 2)                      │ │
-│  │  - 파일/문서 생성 (Phase 2)                             │ │
-│  │  - Audit Log 기록                                      │ │
-│  └────────────────────────────────────────────────────────┘ │
-│                                                              │
-└──────────────────────┬───────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│            User (데스크탑 / 노트북 / 스마트폰)          │
+│                    브라우저 접속                        │
+└──────────────────────┬──────────────────────────────┘
+                       │ HTTPS
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│              Web Frontend (React + Vite)              │
+│                                                      │
+│  ┌───────────┐  ┌────────────┐  ┌────────────────┐  │
+│  │  Chat UI  │  │ Task Board │  │ Calendar View  │  │
+│  │ (대화형    │  │ (할일 목록  │  │ (주간/일간     │  │
+│  │  자연어    │  │  우선순위   │  │  시간블록)      │  │
+│  │  입력)     │  │  대시보드)  │  │                │  │
+│  └───────────┘  └────────────┘  └────────────────┘  │
+│                                                      │
+│  WebSocket ─── 실시간 알림/업데이트 ──── REST API     │
+└──────────────────────┬──────────────────────────────┘
                        │
                        ▼
-              ┌─────────────────┐
-              │  SQLite (SSOT)  │
-              │                 │
-              │  tasks          │
-              │  projects       │
-              │  calendar_blocks│
-              │  user_profile   │
-              │  audit_logs     │
-              └─────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                  FastAPI Backend                      │
+│                                                      │
+│  ┌──────────── Core Services (5단계 플로우) ────────┐ │
+│  │                                                  │ │
+│  │  ┌────────┐ ┌───────────┐ ┌──────────────────┐  │ │
+│  │  │Gather  │ │ Organize  │ │     Plan         │  │ │
+│  │  │(수집)   │ │ (구조화)   │ │   (계획)         │  │ │
+│  │  │        │ │           │ │                  │  │ │
+│  │  │- 수동   │ │- LLM 파싱 │ │- Priority Engine │  │ │
+│  │  │  입력   │ │- 기본값   │ │  (순수 함수)      │  │ │
+│  │  │- 자동   │ │  채움     │ │- Today Planner   │  │ │
+│  │  │  수집   │ │- DB 저장  │ │  (순수 함수)      │  │ │
+│  │  └────────┘ └───────────┘ └──────────────────┘  │ │
+│  │                                                  │ │
+│  │  ┌──────────────┐ ┌──────────────────────────┐   │ │
+│  │  │   Support    │ │      Follow-up           │   │ │
+│  │  │   (지원)     │ │      (마무리)              │   │ │
+│  │  │             │ │                          │   │ │
+│  │  │- 시간 관리   │ │- Enforcement Engine      │   │ │
+│  │  │- 방향성 제시 │ │  (Narrowing/Commit/Esc)  │   │ │
+│  │  │- 링크/정보   │ │- 제출 확인 리마인더        │   │ │
+│  │  │  제공        │ │- 후속 일정 조정            │   │ │
+│  │  └──────────────┘ └──────────────────────────┘   │ │
+│  └──────────────────────────────────────────────────┘ │
+│                                                      │
+│  ┌──────────── LLM Router (4-Model Architecture) ───┐ │
+│  │                                                  │ │
+│  │  [M1] Worker (gpt-4o-mini)                       │ │
+│  │  - 입력 파싱, 구조화, JSON 변환                     │ │
+│  │  - 생각하지 않는 처리기. 모든 입력을 삼켜서 정리      │ │
+│  │                                                  │ │
+│  │  [M2] Stabilizer (Claude 3.5 Sonnet)             │ │
+│  │  - 언어 정리, 안정적 해석, 중간 번역                 │ │
+│  │  - 과확장 없이 현실적으로 정돈                       │ │
+│  │  - 작업 분해, 컨텍스트 분석, 노트 작성               │ │
+│  │                                                  │ │
+│  │  [M3] Judge (Flagship: GPT-5 / Claude Opus급)    │ │
+│  │  - 장기목표 vs 단기만족 충돌 판단                    │ │
+│  │  - 반복 실패 패턴 인식 + 개입/설득/차단              │ │
+│  │  - 하루 1~3회 이하. 개입 권한 필요 시만 호출         │ │
+│  │                                                  │ │
+│  │  [M4] Distiller (Sonnet급, 요약/리플렉션 전용)      │ │
+│  │  - 일/주 단위 로그 → 노이즈 제거 요약               │ │
+│  │  - 감정/행동/결과 중심 압축                         │ │
+│  │  - 장기 메모리 정제 → MEMORY.md 자동 갱신           │ │
+│  │                                                  │ │
+│  └──────────────────────────────────────────────────┘ │
+│                                                      │
+│  ┌──────────── Integration Layer ───────────────────┐ │
+│  │                                                  │ │
+│  │  ┌──────────────┐  ┌───────────────────────────┐ │ │
+│  │  │ Obsidian R/W │  │ School Systems (Phase 3)  │ │ │
+│  │  │              │  │                           │ │ │
+│  │  │ The Record   │  │ e-Class (과제/강의자료)     │ │ │
+│  │  │ 볼트 직접    │  │ nDRIMS (학적/수강신청)     │ │ │
+│  │  │ 파일 R/W     │  │ dongguk.edu (학사 공지)    │ │ │
+│  │  │              │  │ ai.dongguk.edu (학과 공지) │ │ │
+│  │  └──────────────┘  └───────────────────────────┘ │ │
+│  └──────────────────────────────────────────────────┘ │
+│                                                      │
+│  ┌──────────── Context Engine ("제2의 두뇌") ────────┐ │
+│  │                                                  │ │
+│  │  context/                                        │ │
+│  │  ├── AGENT_SOUL.md   ← AI 비서 정체성/톤/역할      │ │
+│  │  ├── USER_PROFILE.md ← 사용자 이해 (ADHD, 패턴)   │ │
+│  │  └── MEMORY.md       ← 진행 중 맥락 (자동 갱신)    │ │
+│  │                                                  │ │
+│  │  + The Record 볼트 (옵시디언 온톨로지)              │ │
+│  │    - 데일리 노트 → 일상 기록 참조                   │ │
+│  │    - 프로젝트 _index.md → 프로젝트 현황             │ │
+│  │    - 3_Areas/ → 지식/학습 체계                     │ │
+│  │                                                  │ │
+│  │  + DB (SSOT)                                     │ │
+│  │    - user_profile (수면, 에너지, 집중 시간대)        │ │
+│  │    - 행동 패턴 (완료율, 지연, 에너지 정확도)         │ │
+│  │    - 학교 스케줄 (학사일정, 수업 시간표)             │ │
+│  │                                                  │ │
+│  │  온톨로지 = LLM 컨텍스트 + 결정론적 계획 + 패턴학습  │ │
+│  │                                                  │ │
+│  └──────────────────────────────────────────────────┘ │
+│                                                      │
+└──────────────────────┬──────────────────────────────┘
                        │
-              ┌────────┴────────┐
-              │  APScheduler    │
-              │                 │
-              │  - 리마인더     │
-              │  - enforce 체크 │
-              │  - 아침 플랜    │
-              └─────────────────┘
+             ┌─────────┴──────────┐
+             │  Postgres (SSOT)   │
+             │    (Docker)        │
+             │                    │
+             │  tasks             │
+             │  projects          │
+             │  calendar_blocks   │
+             │  planned_blocks    │
+             │  user_profile      │
+             │  audit_logs        │
+             │  task_completions  │
+             │  integration_sources│
+             └────────┬───────────┘
+                      │
+             ┌────────┴───────────┐
+             │   APScheduler      │
+             │                    │
+             │ - enforcement 체크  │
+             │ - 리마인더 발송     │
+             │ - 학교 사이트 수집   │
+             │ - 아침 플랜 생성    │
+             └────────────────────┘
 ```
 
 ---
@@ -97,105 +168,258 @@
 The_Agent/
 ├── docs/                          # 설계 문서
 ├── tests/                         # 테스트
-│   ├── test_prioritizer.py
-│   ├── test_planner.py
-│   └── test_enforcement.py
-├── app/
-│   ├── main.py                    # FastAPI 앱 + 라이프사이클
-│   ├── config.py                  # 설정 (환경변수, 상수)
-│   ├── db.py                      # SQLAlchemy 엔진/세션
-│   ├── models.py                  # ORM 모델
-│   ├── schemas.py                 # Pydantic 스키마 (입출력)
-│   ├── bot.py                     # Telegram Bot 설정 + 핸들러
-│   │
-│   ├── services/
-│   │   ├── inbox.py               # 인박스 파싱 (LLM 호출 지점)
-│   │   ├── prioritizer.py         # 우선순위 점수 (순수 함수)
-│   │   ├── planner.py             # Today Plan 생성 (순수 함수)
-│   │   ├── enforcement.py         # 미이행 감지 + 재계획
-│   │   ├── llm.py                 # LLM 클라이언트 래퍼
-│   │   ├── memory.py              # 장기 기억 (Phase 2: vector search)
-│   │   ├── tools_executor.py      # 도구 실행기 (allowlist + audit)
-│   │   └── audit.py               # 감사 로그
-│   │
-│   └── api/
-│       ├── inbox.py               # POST /inbox
-│       ├── tasks.py               # GET/POST /tasks
-│       ├── plan.py                # POST /plan/today
-│       └── enforce.py             # POST /enforce/check
 │
-├── alembic/                       # DB 마이그레이션 (Phase 2, Postgres 전환 시)
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
+├── backend/
+│   ├── app/
+│   │   ├── main.py                # FastAPI 앱 + 라이프사이클
+│   │   ├── config.py              # 설정 (환경변수, 상수)
+│   │   ├── db.py                  # SQLAlchemy 엔진/세션
+│   │   ├── models.py              # ORM 모델
+│   │   ├── schemas.py             # Pydantic 스키마
+│   │   │
+│   │   ├── services/
+│   │   │   ├── inbox.py           # Gather: 인박스 파싱 (LLM)
+│   │   │   ├── prioritizer.py     # Plan: 우선순위 (순수 함수)
+│   │   │   ├── planner.py         # Plan: Today Plan (순수 함수)
+│   │   │   ├── enforcement.py     # Follow-up: 미이행 감지 + 재계획
+│   │   │   ├── context.py         # Context Engine: 온톨로지 + SSOT 통합
+│   │   │   ├── pattern.py         # Pattern Learner: 행동 분석
+│   │   │   ├── llm.py             # LLM Router (Fast/Smart Lane)
+│   │   │   ├── audit.py           # 감사 로그
+│   │   │   └── tools_executor.py  # 도구 실행기 (allowlist)
+│   │   │
+│   │   ├── context/                   # "제2의 두뇌" — AI 컨텍스트 파일
+│   │   │   ├── AGENT_SOUL.md          # AI 비서 정체성/역할/톤
+│   │   │   ├── USER_PROFILE.md        # 사용자 이해 (ADHD, 습관, 선호)
+│   │   │   └── MEMORY.md             # 진행 중 맥락 (자동 갱신)
+│   │   │
+│   │   ├── integrations/
+│   │   │   ├── obsidian.py        # Obsidian R/W
+│   │   │   ├── school_eclass.py   # e-Class 연동 (Phase 3)
+│   │   │   ├── school_ndrims.py   # nDRIMS 연동 (Phase 3)
+│   │   │   ├── school_notices.py  # 공지 수집 (Phase 3)
+│   │   │   └── telegram.py        # Telegram 보조 알림 (Phase 3)
+│   │   │
+│   │   ├── api/
+│   │   │   ├── inbox.py           # POST /inbox
+│   │   │   ├── tasks.py           # CRUD /tasks
+│   │   │   ├── plan.py            # POST /plan/today
+│   │   │   ├── enforce.py         # POST /enforce/check
+│   │   │   ├── chat.py            # WebSocket /ws/chat
+│   │   │   └── integrations.py    # 통합 관련 API
+│   │   │
+│   │   └── ws/
+│   │       └── manager.py         # WebSocket 연결 관리
+│   │
+│   ├── Dockerfile
+│   └── requirements.txt
+│
+├── frontend/
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── pages/
+│   │   │   ├── ChatPage.tsx       # 대화형 입력 (메인)
+│   │   │   ├── TasksPage.tsx      # Task 대시보드
+│   │   │   └── CalendarPage.tsx   # 캘린더 뷰
+│   │   ├── components/
+│   │   │   ├── ChatMessage.tsx
+│   │   │   ├── TaskCard.tsx
+│   │   │   ├── PlanBlock.tsx
+│   │   │   └── Sidebar.tsx
+│   │   └── hooks/
+│   │       ├── useWebSocket.ts    # 실시간 연결
+│   │       └── useApi.ts          # REST API 호출
+│   ├── Dockerfile
+│   └── package.json
+│
+├── docker-compose.yml             # Postgres + Backend + Frontend
 ├── .env.example
 └── README.md
 ```
 
 ---
 
-## 데이터 흐름 (4대 플로우)
+## LLM 전략 — 4-Model Architecture (성능 최우선)
 
-### A. Inbox Capture
-```
-사용자 "내일 OS과제 제출" 
-  → Telegram Bot 수신 
-  → POST /inbox {text: "내일 OS과제 제출"} 
-  → LLM parse (gpt-4o-mini) → TaskCreate 스키마 
-  → 부족 필드 기본값 채움 (est=60min, importance=3) 
-  → DB 저장 
-  → 사용자에게 확인 메시지 (수정 가능)
-```
+### 설계 원칙
 
-### B. Deterministic Prioritization
 ```
-GET /tasks?status=pending 
-  → 전체 미완료 task 로드 
-  → priority_score 계산 (순수 함수, 같은 입력 = 같은 결과) 
-  → 정렬 후 반환
+- 모델은 절대 "나"가 아니다
+- 기억은 외부 메모리 시스템이 관리한다
+- 모델은 판단만 한다
+- 플래그십 모델은 희소하게 호출한다
+- 요약/정제 레이어 없이는 장기 개인화는 불가능하다
 ```
 
-### C. Today Plan
+### 4개 모델 역할 분리
+
+#### [M1] Worker — gpt-4o-mini
+**역할: 입력 처리 / 구조화 / 노동 레이어**
+
+- 자연어, 음성 메모, 잡다한 텍스트를 구조화된 데이터로 변환
+- 일정 파싱, 태깅, 분류, 중복 제거, JSON/schema 변환
+- **생각이나 판단을 절대 맡기지 않는다**
+
+> 사용자는 ADHD 성향이 있으며, 입력 단계에서 사고를 요구하면 시스템이 실패한다.
+> 이 레이어는 모든 입력을 무조건 삼켜서 정리하는 **흡입기** 역할.
+
+**호출 빈도:** 고빈도 (하루 20~50건)
+**비용:** ~$1~2/월
+
+#### [M2] Stabilizer — Claude 3.5 Sonnet
+**역할: 언어 정리 / 안정적 해석 / 중간 번역기**
+
+- 사용자의 생각을 과도하게 확장하지 않고 안정적으로 정리
+- 감정이 섞인 텍스트를 인간 친화적으로 정돈
+- 작업 분해, 컨텍스트 분석, 옵시디언 노트 작성
+- 플래그십 모델로 가기 전의 **중간 정리 단계**
+
+> 사용자는 사고 확장과 과몰입이 잦기 때문에,
+> 항상 최고 성능 모델을 쓰면 오히려 판단이 튀거나 과잉 개입이 발생한다.
+> Sonnet은 **"현실적인 중간 정리자"**로 사용한다.
+
+**호출 빈도:** 중빈도 (하루 10~20건)
+**비용:** ~$10~15/월
+
+#### [M3] Judge — 최신 플래그십 (GPT-5급 / Claude Opus급)
+**역할: 판단자 / 개입자 / 삶의 운영 판단**
+
+- 장기 목표 vs 단기 만족의 충돌 판단
+- 사용자의 반복 실패 패턴 인식
+- 감정, 체력, 일정, 책임을 동시에 고려한 개입
+- **설득, 차단, 강제 조정이 필요한 상황에서만 호출**
+
+> 이 모델은 항상 호출되지 않는다.
+> 하루 1~3회 이하로 제한하며, "개입할 권한이 필요한 상황"에서만 사용한다.
+> 이 레이어가 있어야 AI가 도구가 아니라 **사용자의 의사결정 파트너**가 된다.
+
+**호출 트리거:**
+- Enforcement Stage 3 (escalation) 도달 시
+- 같은 실패 패턴 3회+ 반복 감지 시
+- 장기 목표와 현재 행동의 심각한 불일치 감지 시
+- 일간/주간 리뷰 시 (1회)
+
+**호출 빈도:** 희소 (하루 1~3건)
+**비용:** ~$5~15/월
+
+#### [M4] Distiller — Sonnet급 (요약/리플렉션 전용)
+**역할: 장기 기억 정제기 (Memory Distiller)**
+
+- 하루/주 단위 로그를 요약
+- 감정 / 행동 / 결과 중심으로 압축
+- "사용자에 대한 데이터"를 노이즈 없이 정제
+- 장기 메모리(MEMORY.md)에 저장 가능한 형태로 변환
+
+> 이 레이어는 **선택이 아니라 필수**다.
+> 원본 로그를 그대로 플래그십 모델에 넣으면:
+> - 비용이 폭발하고
+> - 중요 정보 대비 노이즈 비율이 높아지며
+> - 장기 패턴 학습이 불안정해진다
+>
+> 반드시 중간 요약 레이어를 두고,
+> 플래그십 모델은 이 **정제된 기억만을 참조**하도록 한다.
+
+**호출 빈도:** 저빈도 (하루 1~2건, 주 1건)
+**비용:** ~$3~5/월
+
+### 모델 간 데이터 흐름
+
 ```
-POST /plan/today 
-  → 오늘 calendar_blocks에서 free window 추출 
-  → pending tasks를 priority_score 순 정렬 
-  → 에너지 매칭 + 시간 fitting → 30~60분 블록 배치 
-  → 결과 반환 (+ 선택적 캘린더 등록)
+사용자 입력
+    │
+    ▼
+[M1 Worker] ─── 구조화된 데이터 ──→ DB (SSOT)
+                                      │
+                                      ▼
+                              [코드] 우선순위/일정 계산
+                                      │
+                                      ▼
+[M2 Stabilizer] ← 필요시 ─── 작업 분해, 정리, 노트 작성
+                                      │
+                              ┌───────┴───────┐
+                              │               │
+                    일상적 상황             개입 필요 상황
+                    (M2로 충분)          (Enforcement Stage 3,
+                              │          반복 실패, 목표 충돌)
+                              │               │
+                              ▼               ▼
+                         사용자 응답      [M3 Judge] ─→ 개입/설득/차단
+                                              │
+                                              ▼
+                                         사용자 응답
+    
+[M4 Distiller] ←── 매일 밤 / 매주 ─── 전체 로그
+    │
+    ▼
+MEMORY.md (정제된 장기 기억) ──→ [M3 Judge] 참조
 ```
 
-### D. Enforcement
-```
-APScheduler 30분 간격 실행 (또는 수동 POST /enforce/check)
-  → 현재 시간 기준 지나간 블록 확인 
-  → 완료 안 된 task 감지 
-  → next_action 1개로 축소 
-  → 사용자에게 Telegram 알림 
-  → postpone_count 증가 → 재계획 트리거
-```
+### LLM이 하는 것 vs 코드가 하는 것
+
+| LLM (각 모델별) | 코드 (결정론적) |
+|---|---|
+| [M1] "내일 OS과제 제출" → 구조화된 task | 우선순위 점수 계산 |
+| [M2] 큰 과제 → 단계별 action 분해 | 일정 블록 배치 |
+| [M2] 학교 공지 → 요약 + task 제안 | Enforcement 규칙 적용 |
+| [M2] 옵시디언 노트 초안 작성 | 알림 타이밍 결정 |
+| [M3] 반복 실패 → 개입/설득/차단 판단 | 패턴 데이터 집계/분석 |
+| [M4] 일간 로그 → 정제된 장기 기억 | 패턴 트리거 감지 |
+
+### 비용 추정 (성능 최우선, 제한 없음)
+
+| 모델 | 역할 | 월 추정 |
+|------|------|--------|
+| [M1] gpt-4o-mini | Worker (파싱/구조화) | ~$1~2 |
+| [M2] Claude 3.5 Sonnet | Stabilizer (정리/분해/노트) | ~$10~15 |
+| [M3] Flagship (Opus/GPT-5급) | Judge (판단/개입) | ~$5~15 |
+| [M4] Sonnet급 | Distiller (기억 정제) | ~$3~5 |
+| **LLM 합계** | | **~$20~35** |
+| VPS (별도) | | ~$5~10 |
 
 ---
 
-## LLM 사용 지점 (최소화)
+## Web UI 설계 (개요)
 
-| 호출 지점 | 모델 | 목적 | 호출 빈도 |
-|-----------|------|------|-----------|
-| `inbox.parse()` | gpt-4o-mini | 1줄 텍스트 → TaskCreate 구조화 | 사용자 입력 시 |
-| `inbox.decompose()` | gpt-4o-mini | 큰 task → next_action 1~3개 분해 | task 생성/재분해 시 |
+### 화면 구성
 
-**LLM이 하지 않는 것:**
-- 우선순위 결정 (코드)
-- 일정 배치 (코드)
-- 리마인더 타이밍 (코드)
-- 규칙 적용 (코드)
+```
+┌──────────┬─────────────────────────────────────┐
+│          │                                     │
+│  사이드바  │          메인 영역                   │
+│          │                                     │
+│ 💬 Chat  │  [Chat UI / Task Board / Calendar]  │
+│ ✅ Tasks │                                     │
+│ 📅 Plan  │  선택한 탭에 따라 전환                 │
+│ ⚙️ 설정  │                                     │
+│          │                                     │
+└──────────┴─────────────────────────────────────┘
+```
+
+### Chat UI (메인 인터페이스)
+- LLM 서비스처럼 대화형
+- 자연어 입력 → 시스템이 task 생성, 정보 정리, 플랜 제시
+- 실시간 알림/리마인더도 채팅 형태로 표시
+- 버튼 액션: "할게", "미룰게", "완료", "자세히" 등
+
+### Task Board
+- 우선순위 순 task 목록
+- 상태별 필터 (pending, in_progress, done)
+- 마감 임박 표시, 미루기 횟수 표시
+- 빠른 상태 변경 (완료/미루기)
+
+### Calendar View
+- Today Plan 시간 블록 시각화
+- 고정 일정 (수업 등) + 계획된 task 블록
+- 주간 뷰 / 일간 뷰
 
 ---
 
-## 비용 추정 (MVP)
+## 비용 요약
 
-| 항목 | 추정 | 비용 |
-|------|------|------|
-| gpt-4o-mini (하루 20건 파싱) | ~2K tokens/건 × 20건 | 월 ~$1 |
-| VPS (최소 사양) | 1 vCPU, 1GB RAM | 월 $0~5 (Oracle Free Tier 가능) |
-| Telegram Bot API | 무료 | $0 |
-| **합계** | | **월 $1~6** |
+| 항목 | 월 추정 |
+|------|--------|
+| LLM API | $15~25 |
+| VPS | $5~10 (별도) |
+| Postgres | VPS 내 Docker ($0) |
+| Telegram Bot API | $0 |
+| 도메인 (선택) | $0~1 |

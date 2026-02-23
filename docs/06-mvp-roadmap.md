@@ -1,277 +1,343 @@
-# 06 — MVP Roadmap
+# 06 — MVP Roadmap (v2)
+
+> **v2 재설계: 2026-02-15**
+> Pain-point 우선 순서. 생활 관리 먼저, 학교 연동은 개강 후.
+> 동국대 2026-1학기 개강: **3월 3일** (실제 일정 확인 완료)
 
 ## 목표
 
-**개강 전까지 4대 플로우가 실제로 돌아가는 시스템 완성.**
-
-핵심은 "완벽한 시스템"이 아니라 **"매일 쓸 수 있는 시스템"**.
+**개강 전까지 "매일 쓸 수 있는 생활 관리 시스템" 완성.**
+학교 연동은 개강 후 학교 시스템 접근 가능할 때 추가.
 
 ---
 
-## Phase 1: MVP (2주)
+## Phase 1: Core + Web UI (2/15 ~ 2/28, 2주)
 
-### Sprint 1 (Day 1~4) — Foundation + Inbox
+> "브라우저 열면 바로 쓸 수 있는 기본 시스템"
+
+### Sprint 1 (Day 1~4) — Backend Foundation
 
 #### Step 1.1: 프로젝트 초기 세팅 (Day 1)
 
 **작업:**
-- Python 프로젝트 구조 생성 (app/, tests/)
-- requirements.txt 작성 (fastapi, uvicorn, sqlalchemy, python-telegram-bot, openai, apscheduler, pydantic)
-- SQLAlchemy 모델 정의 (models.py)
-- DB 초기화 + seed 데이터 (db.py)
+- 프로젝트 구조 생성 (backend/, frontend/, docs/)
+- Docker Compose (Postgres + FastAPI)
+- requirements.txt (fastapi, uvicorn, sqlalchemy, asyncpg, openai, anthropic, apscheduler, pydantic)
+- SQLAlchemy 모델 정의 (models.py) — Postgres 기준
+- DB 초기화 + seed 데이터
 - config.py (.env 로딩)
-- .env.example 작성
 
 **Done 정의:**
-- [x] `python -m app.db` 실행 시 SQLite DB 파일 생성됨
-- [x] 모든 테이블이 생성됨 (tasks, projects, calendar_blocks, planned_blocks, user_profile, audit_logs, task_completions)
-- [x] user_profile에 기본 row(id=1) 존재
-- [x] "미분류" 프로젝트 존재
-
-**테스트:**
-- DB 생성/삭제 반복 시 에러 없음
-- ORM 모델로 task CRUD 가능
-
----
+- `docker compose up` → Postgres + FastAPI 컨테이너 기동
+- 모든 테이블 생성됨
+- user_profile(id=1) + "미분류" 프로젝트 존재
+- `/health` 엔드포인트 응답
 
 #### Step 1.2: Inbox + LLM 파싱 (Day 2~3)
 
 **작업:**
-- schemas.py: TaskCreate, TaskResponse Pydantic 모델
-- services/llm.py: OpenAI 클라이언트 래퍼 (structured output)
-- services/inbox.py: parse_inbox() — 1줄 텍스트 → TaskCreate
-- services/audit.py: 기본 audit log 기록
-- api/inbox.py: POST /inbox 엔드포인트
-- main.py: FastAPI 앱 생성
+- LLM Router 구현 (Fast Lane: gpt-4o-mini, Smart Lane: Claude 3.5 Sonnet)
+- inbox.py: parse_inbox() — 자연어 → TaskCreate
+- schemas.py: TaskCreate, TaskResponse
+- POST /inbox 엔드포인트
+- 기본값 자동 채움 (est=60min, importance=3, energy=3)
+- LLM 장애 시 fallback (원문 그대로 저장)
 
 **Done 정의:**
-- [x] `POST /inbox {"text": "내일 OS과제 제출"}` → task가 DB에 저장됨
-- [x] 반환값에 title, deadline_at, est_minutes, importance 포함
-- [x] 기본값 자동 채움 동작 (빈 필드에 est=60, importance=3)
-- [x] audit_logs에 "task_created" 이벤트 기록됨
+- `POST /inbox {"text": "내일 OS과제 제출 2시간 중요"}` → task DB 저장
+- 기본값 자동 채움 동작
+- audit_logs에 기록
+- LLM 죽어도 task 생성 가능
 
-**테스트:**
-- "내일 OS과제 제출 2시간 중요" → deadline이 내일, est=120, importance=5
-- "빨래" → deadline=null, est=60, importance=3 (전부 기본값)
-- 빈 문자열 → 422 에러
-- LLM 장애 시 → fallback (title=원문 그대로, 나머지 기본값)
+#### Step 1.3: Priority Engine (Day 3~4)
+
+**작업:**
+- prioritizer.py: f(), g(), h(), p(), calculate_priority()
+- 불변 규칙 (24h 이내 최상단)
+- GET /tasks에 priority_score 정렬
+
+**Done 정의:**
+- 순수 함수: 같은 입력 → 같은 출력
+- 단위 테스트 전체 통과
 
 ---
 
-#### Step 1.3: Telegram Bot 연동 (Day 3~4)
+### Sprint 2 (Day 5~8) — Web UI + Planner
+
+#### Step 2.1: React 프론트엔드 세팅 (Day 5)
 
 **작업:**
-- bot.py: Telegram Bot 설정 + 메시지 핸들러
-- 명령어 핸들러: /tasks, /done, /skip, /plan, /status
-- 기본 동작: 일반 텍스트 → POST /inbox 호출
-- chat_id 필터링 (본인만 허용)
-- main.py에 Bot startup 추가
+- Vite + React + TypeScript + Tailwind + shadcn/ui 초기화
+- 기본 레이아웃 (사이드바 + 메인 영역)
+- API 클라이언트 설정 (fetch/axios)
+- Docker 멀티스테이지 빌드 설정
 
 **Done 정의:**
-- [x] Telegram에서 "내일 OS과제 제출" 전송 → task 생성 + 확인 메시지 수신
-- [x] `/tasks` → pending tasks 목록 출력
-- [x] `/done 42` → task 완료 처리 + 확인 메시지
-- [x] 모르는 chat_id → 무응답
+- `docker compose up` → Frontend도 함께 기동
+- 브라우저에서 기본 레이아웃 표시됨
 
-**테스트:**
-- 실제 Telegram에서 메시지 송수신 확인
-- 허용되지 않은 chat_id에서 메시지 보내도 응답 없음
-
----
-
-### Sprint 2 (Day 5~8) — Priority + Planner
-
-#### Step 2.1: Deterministic Prioritizer (Day 5)
+#### Step 2.2: Chat UI (Day 5~6)
 
 **작업:**
-- services/prioritizer.py: f(), g(), h(), p(), calculate_priority() 구현
-- 가중치 상수 정의
-- 불변 규칙 (24h 이내 최상단) 구현
-- GET /tasks에 priority_score 정렬 적용
+- ChatPage.tsx: 대화형 인터페이스
+- 메시지 입력 → POST /inbox → 응답 표시
+- task 생성 결과 카드 형태로 표시
+- WebSocket 연결 (실시간 업데이트)
 
 **Done 정의:**
-- [x] calculate_priority()가 순수 함수 (같은 입력 → 같은 출력)
-- [x] 마감 24h 이내 task가 항상 최상단
-- [x] postpone_count 증가 시 점수 상승
-- [x] 모든 f/g/h/p 함수에 대한 단위 테스트 통과
+- 채팅창에 "내일 OS과제 제출" 입력 → task 생성 카드 표시
+- 실시간 반영 (새로고침 없이)
 
-**테스트 시나리오:**
-```python
-# 같은 입력 → 같은 결과 (결정론 검증)
-assert calculate_priority(task_a, now, energy=3) == calculate_priority(task_a, now, energy=3)
-
-# 마감 가까울수록 높음
-assert f(12) > f(48) > f(120)
-
-# 미루기 많을수록 높음
-task_a.postpone_count = 0
-task_b.postpone_count = 3
-assert calculate_priority(task_b, ...) > calculate_priority(task_a, ...)
-
-# 불변 규칙: 24h 이내 무조건 최상단
-assert calculate_priority(due_in_12h, ...) > calculate_priority(due_in_72h_importance_5, ...)
-```
-
----
-
-#### Step 2.2: Today Planner (Day 6~7)
+#### Step 2.3: Task Board (Day 6~7)
 
 **작업:**
-- services/planner.py: extract_free_windows(), generate_today_plan()
-- 에너지 레벨 시간대 매핑
-- 30/60분 블록 배치 로직
-- 휴식 블록 삽입
-- POST /plan/today 엔드포인트
+- TasksPage.tsx: 우선순위 순 task 목록
+- 상태 필터 (pending/in_progress/done)
+- 빠른 완료/미루기 버튼
+- 마감 임박 하이라이트
+
+**Done 정의:**
+- task 목록이 우선순위 순으로 표시
+- 완료/미루기 동작
+
+#### Step 2.4: Today Planner + Calendar View (Day 7~8)
+
+**작업:**
+- planner.py: extract_free_windows(), generate_today_plan()
+- CalendarPage.tsx: 시간 블록 시각화
+- POST /plan/today → 블록 생성 → UI 표시
 - planned_blocks DB 저장
 
 **Done 정의:**
-- [x] POST /plan/today → 오늘의 시간 블록 리스트 반환
-- [x] fixed 일정(수업 등)과 겹치지 않음
-- [x] 수면/식사 시간에 배치되지 않음
-- [x] 고에너지 작업은 집중 시간대에 우선 배치
-- [x] 연속 2블록 후 휴식 블록 존재
-- [x] 같은 조건으로 재실행 시 같은 결과
-
-**테스트 시나리오:**
-```python
-# 수업(10:00~12:00) 시간에 task 배치 안 됨
-plan = generate_today_plan(tasks, calendar_with_class)
-for block in plan.blocks:
-    assert not overlaps(block, class_block)
-
-# 수면 시간에 배치 안 됨
-for block in plan.blocks:
-    assert not in_sleep_window(block)
-
-# 결정론: 같은 입력 → 같은 plan
-plan1 = generate_today_plan(tasks, calendar)
-plan2 = generate_today_plan(tasks, calendar)
-assert plan1 == plan2
-```
+- "오늘 플랜" 요청 시 시간 블록 리스트 생성
+- 캘린더 뷰에 블록 표시
+- 고정 일정과 겹치지 않음
 
 ---
 
-#### Step 2.3: Telegram Plan 표시 (Day 8)
+### Sprint 3 (Day 9~12) — Enforcement + Deploy
+
+#### Step 2.5: 컨텍스트 파이프라인 기반 구축 (Day 9~10)
+
+> **Phase 2 Step 2.0에서 앞당김 (2026-02-18 결정)**
+> 이유: M1이 이미 USER_PROFILE.md를 사용 중이고, M2/M3 추가 시 프롬프트 조립이
+> 중복되는 구조적 문제가 있음. 컨텍스트 시스템은 모든 모델의 판단 품질을 결정하는
+> 기반 인프라이므로 Phase 1에서 잡아야 함.
+> 상세 명세: `07-memory-architecture.md` § 7 참조.
 
 **작업:**
-- `/plan` 명령어에 Today Plan 포맷팅 연결
-- 보기 좋은 텍스트 포맷:
-  ```
-  📅 오늘의 플랜 (2/16)
-  
-  10:00-11:00  🔴 OS과제 제출
-               → 과제 파일 열어서 진행 상태 확인
-  11:00-11:10  ☕ 휴식
-  11:10-11:40  🟡 이메일 답장
-               → 교수님 메일 확인 후 답장
-  
-  📊 총 집중시간: 90분 (2블록)
-  ```
+- `backend/app/services/context.py` 모듈 생성
+  - `build_context(role, db)`: 모델별 컨텍스트 조립 함수
+  - `get_working_state(db)`: Layer 3 Working Memory (DB 쿼리 → 현재 상태 텍스트)
+- `inbox.py`의 하드코딩된 프롬프트 조립을 `context.py` 호출로 교체
+- 프롬프트 배치 규칙 적용 (Zone A/B/C 구조, `07-memory-architecture.md` § 7.2)
+- `AGENT_SOUL.md`를 프롬프트에 통합
+- `USER_PROFILE.md` 포맷 검토 + LLM 소화 가능한 구조로 정리
+- `inbox_logs`에 `context_tokens` 필드 추가 (토큰 사용량 추적)
 
 **Done 정의:**
-- [x] Telegram에서 `/plan` → 위 형태의 포맷된 플랜 출력
-- [x] 아직 plan이 없으면 자동 생성 후 출력
+- `build_context(ModelRole.WORKER, db)` 호출로 M1 system prompt 조립됨
+- `inbox.py`에 프롬프트 조립 코드가 없음 (context.py로 완전 이관)
+- Working Memory가 동작: pending task 수, 오늘 완료 수 등이 프롬프트에 포함됨
+- `AGENT_SOUL.md` 내용이 프롬프트 상단에 포함됨
+- 매 요청마다 `inbox_logs.context_tokens`에 토큰 수 기록됨
 
 ---
 
-### Sprint 3 (Day 9~12) — Enforcement + Polish
-
-#### Step 3.1: Enforcement Engine (Day 9~10)
+#### Step 3.1: Enforcement Engine (Day 11~12)
 
 **작업:**
-- services/enforcement.py: check_enforcement(), auto_decompose()
-- APScheduler에 30분 간격 enforcement 체크 등록
-- Telegram 알림 발송 (narrowing/escalation/deadline_warning)
-- 알림 쿨다운 로직 (과도 알림 방지)
-- postpone 시 자동 재계획 트리거
+- enforcement.py: check_enforcement(), auto_decompose()
+- APScheduler 30분 간격 체크 등록
+- WebSocket으로 알림 발송 (채팅 UI에 표시)
+- "할게" / "미룰게" 인라인 버튼
+- 알림 쿨다운 (과도 알림 방지)
 
 **Done 정의:**
-- [x] 지나간 블록의 미완료 task → Telegram 알림 수신
-- [x] 알림에 "할게" / "미룰게" 선택지 포함
-- [x] "미룰게" → postpone_count 증가 + 우선순위 상승
-- [x] postpone 3회+ → escalation 알림 (강도 높은 메시지)
-- [x] 같은 task에 1시간 내 중복 알림 안 옴
+- 미이행 블록 → 채팅 UI에 알림 표시
+- "미룰게" → postpone_count 증가 + 우선순위 상승
+- 같은 task 1시간 내 중복 알림 없음
 
-**테스트:**
-```python
-# 미이행 감지
-block = create_past_block(task_id=42, status="scheduled")
-actions = check_enforcement(now)
-assert any(a.task_id == 42 for a in actions)
-
-# 쿨다운: 1시간 내 중복 방지
-send_enforcement(task_id=42)
-actions = check_enforcement(now + timedelta(minutes=30))
-assert not any(a.task_id == 42 for a in actions)
-
-# postpone 3회 → escalation
-task.postpone_count = 3
-actions = check_enforcement(now)
-assert actions[0].type == "escalation"
-```
-
----
-
-#### Step 3.2: 안정화 + 일상 사용 테스트 (Day 11~12)
+#### Step 3.2: VPS 배포 (Day 12~13)
 
 **작업:**
-- 에러 핸들링 강화 (LLM 장애, DB 에러, 네트워크 에러)
-- Failure mode: LLM 죽으면 → 원문 그대로 task.title에 저장 (기본값 채움)
-- 로깅 정리 (structured logging)
-- 실제 하루 사용 시뮬레이션 (본인이 직접 사용)
-- 버그 수정 + 엣지 케이스 처리
+- VPS 서버 세팅 (Docker, Docker Compose)
+- docker-compose.yml: Postgres + Backend + Frontend
+- Nginx 리버스 프록시 (또는 Caddy)
+- HTTPS 설정 (Let's Encrypt)
+- .env 설정
 
 **Done 정의:**
-- [x] LLM API 장애 시에도 task 생성 가능 (fallback)
-- [x] 하루 종일 사용해도 크래시 없음
-- [x] 아침에 /plan → 낮에 enforcement 알림 → 저녁에 /done으로 하루 사이클 완료
+- 외부 브라우저에서 접속 가능
+- 데스크탑/노트북 모두 같은 URL로 접속
+- 24/7 가동 확인
+
+#### Step 3.3: 안정화 (Day 13~14)
+
+**작업:**
+- 에러 핸들링 강화
+- 실사용 테스트 (본인이 직접 하루 종일 사용)
+- 버그 수정 + 엣지 케이스
+- UI 다듬기
+
+**Done 정의:**
+- 하루 종일 사용해도 크래시 없음
+- 아침 플랜 → 낮 enforcement → 저녁 완료 사이클 동작
 
 ---
 
-## Phase 1 완료 기준 (개강 전)
+## Phase 2: Obsidian + 생활 안정화 (3/1 ~ 3/10, 10일)
 
-모든 Sprint 완료 후, 다음 시나리오가 end-to-end로 동작:
+> "옵시디언과 연동하여 기존 생활 기록 시스템과 통합"
 
-```
-아침 08:30  사용자 기상
-        09:00  사용자: "내일 OS과제 제출 2시간 중요"
-               봇: "✅ task 생성: OS과제 제출 (마감: 내일 23:59, 2시간, 중요도 5)"
-        09:01  사용자: /plan
-               봇: "📅 오늘의 플랜..." (시간 블록 표시)
-        
-낮   10:00  스케줄된 블록 시작
-        11:05  블록 종료 후 미완료 감지
-               봇: "'OS과제 제출' 블록이 지났어요. 지금 딱 이것만: 과제 파일 열기"
-               사용자: "할게"
-               봇: "좋아요! 11:10~12:00에 배정했어요."
-        
-저녁 20:00  사용자: /done 42
-               봇: "🎉 OS과제 제출 완료! 마감 전 완료 👍"
-        
-밤   23:00  봇: (알림 없음 — 수면 시간 접근)
-```
+### Step 2.0: 컨텍스트 파일 고도화 + MEMORY.md 연동
+
+> **기존 Step 2.0의 기반 구축(context.py, 배치 규칙, AGENT_SOUL/USER_PROFILE 통합)은
+> Phase 1 Step 2.5로 이관됨.** 여기서는 그 위에 쌓는 작업만 수행.
+
+**작업:**
+- `context/MEMORY.md` 자동 갱신 구조 구현 (현재는 수동)
+- M2 Stabilizer 컨텍스트 구성 + 첫 호출 연동
+- 컨텍스트 품질 A/B 테스트: 동일 입력에 대해 컨텍스트 유무로 파싱 품질 비교
+- Phase 1에서 축적된 `inbox_logs.context_tokens` 데이터로 토큰 예산 검증
+
+**Done 정의:**
+- MEMORY.md가 주기적으로 자동 갱신됨
+- M2 호출 시 `build_context(ModelRole.STABILIZER, db)`로 적절한 컨텍스트 주입됨
+- 컨텍스트 유무에 따른 파싱 품질 차이가 정량적으로 확인됨
+
+### Step 2.1: Obsidian 읽기 연동
+
+**작업:**
+- obsidian.py: 볼트 파일 읽기 (The Record 구조 이해)
+- Context Engine에 옵시디언 데이터 피드 (온톨로지 역할)
+  - 데일리 노트 → 일상 기록 참조
+  - 프로젝트 _index.md → 프로젝트 현황
+  - 3_Areas/ → 지식/학습 체계
+- 채팅에서 "오늘 뭐 했었지?" → 데일리 노트 참조해서 답변
+
+**Done 정의:**
+- The Record 볼트의 데일리 노트, 프로젝트 _index.md 읽기 가능
+- 채팅에서 옵시디언 내용 참조한 답변 가능
+- 온톨로지 컨텍스트가 Enforcement/Planner에도 반영 가능
+
+### Step 2.2: Obsidian 쓰기 연동
+
+**작업:**
+- 데일리 노트에 개발 로그/공부 기록 자동 추가
+- 프로젝트 _index.md 업데이트
+- The Record 워크플로우 규칙 일부 반영
+
+**Done 정의:**
+- 채팅에서 "오늘 한 거 기록해줘" → 데일리 노트에 반영
+- 파일 충돌 없이 안전한 쓰기
+
+### Step 2.3: 패턴 기본 설정 + Telegram 알림
+
+**작업:**
+- user_profile 상세 설정 UI
+- 수면/에너지/집중 시간대 초기값 입력
+- Telegram Bot 보조 알림 설정 (선택)
 
 ---
 
-## Phase 2 (학기 중, 점진적)
+## Phase 3: 학교 연동 (개강 후, 3/10 ~ 3/31)
+
+> "학교 시스템에서 자동으로 정보 수집, 과제 놓치는 문제 해결"
+
+### Step 3.1: 학교 사이트 스크래핑 기반
+
+**작업:**
+- Playwright 기반 브라우저 자동화
+- e-Class 로그인 + 과제 목록 수집
+- nDRIMS 학사 일정 수집
+- 동국대 포탈 / 학과 공지사항 수집
+
+**기술 접근:**
+```
+1. Playwright headless 브라우저로 로그인
+2. 과제/공지 페이지 파싱
+3. LLM으로 내용 구조화 → task/event 생성
+4. APScheduler로 주기적 수집 (하루 2~3회)
+```
+
+**보안:**
+- 학교 로그인 정보는 .env에 저장 (커밋 금지)
+- 로컬 VPS에서만 접근
+
+### Step 3.2: 학사 일정 자동 등록
+
+**작업:**
+- 2026-1학기 주요 일정 calendar_blocks에 자동 등록
+  - 개강 (3/3), 중간시험 (4/21~27), 기말시험 (6/9~15), 종강 (6/15)
+  - 수강신청 정정, 학점포기 신청 등 기한 관리
+- 수업 시간표 → 매주 반복 calendar_blocks
+
+### Step 3.3: 과제/제출 리마인더
+
+**작업:**
+- e-Class에서 수집한 과제 → task 자동 생성
+- 마감 D-3, D-1, D-day 리마인더
+- 제출 시: LMS 제출 페이지 링크 + 제출할 파일 안내 + 제출 확인 리마인더
+
+---
+
+## Phase 4: 심화 (학기 중, 지속적)
 
 | 기능 | 설명 | 우선순위 |
 |------|------|---------|
-| 반복 일정 | 매주 수업 자동 등록 (recurrence) | 높음 |
-| Google Calendar 연동 | 캘린더에 planned block 자동 등록 | 높음 |
-| 습관 대시보드 | 주간 완료율, 평균 지연, 에너지 정확도 | 중간 |
-| 작업 분해 고도화 | 큰 과제 → 자동 서브태스크 생성 | 중간 |
-| RAG 메모리 | 강의자료/메일 검색 (pgvector) | 낮음 |
-| 멀티채널 | Discord 추가 | 낮음 |
-| 웹 대시보드 | 브라우저에서 조회/수정 | 낮음 |
+| 패턴 학습 고도화 | 에너지/집중 시간대 자동 보정 | 높음 |
+| 적응형 가중치 | 완료 패턴 → 우선순위 가중치 자동 조정 | 높음 |
+| 주간 리포트 | 완료율, 지연, 에너지 정확도 대시보드 | 중간 |
+| 프로젝트 B 흡수 | LLM_MCP_Agent의 MCP/Tool 학습 내용 통합 | 중간 |
+| 고급 옵시디언 연동 | 3_Areas 자동 정리, 학습 노트 생성 | 낮음 |
+| pgvector RAG | 과거 노트/강의자료 검색 | 낮음 |
+| 스마트폰 최적화 | 반응형 UI + PWA | 중간 |
 
 ---
 
-## Phase 3 (장기)
+## Phase 1 완료 기준 (2/28)
 
-| 기능 | 설명 |
+다음 시나리오가 end-to-end로 동작:
+
+```
+아침 09:00  브라우저 접속
+        09:01  채팅: "내일까지 알고리즘 레포트 3페이지"
+               시스템: "✅ task 생성: 알고리즘 레포트 (마감: 내일 23:59, 예상 180분, 중요도 4)"
+               시스템: "📝 next_action: 레포트 주제 및 목차 정리"
+        
+        09:02  사이드바 → Plan 탭 클릭
+               시스템: 오늘의 시간 블록 표시
+               10:00~11:00  🔴 알고리즘 레포트 (→ 주제 및 목차 정리)
+               11:00~11:10  ☕ 휴식
+               11:10~11:40  🟡 빨래
+        
+낮   11:05  블록 종료 후 미완료 감지
+               채팅 알림: "'알고리즘 레포트' 블록이 지났어요. 지금 딱 이것만: 주제 및 목차 정리"
+               [할게] [미룰게]
+               → "할게" 클릭
+               시스템: "11:10~12:10에 배정했어요."
+        
+저녁 20:00  Task Board → "알고리즘 레포트" → [완료] 클릭
+               시스템: "🎉 알고리즘 레포트 완료! 마감 전 완료 👍"
+```
+
+---
+
+## 핵심 학사 일정 (동국대 2026-1학기)
+
+Phase 3에서 자동 등록할 일정들:
+
+| 날짜 | 일정 |
 |------|------|
-| LMS 연동 | 학교 LMS에서 과제/공지 자동 파싱 |
-| 이메일 연동 | 중요 메일 자동 감지 → task 생성 제안 |
-| 적응형 가중치 | 완료 패턴 분석 → 가중치 자동 조정 |
-| 다중 사용자 | 인증/권한 분리 |
+| 02/19~02/24 | 1학기 등록 |
+| **03/03** | **개강** |
+| 03/03~03/09 | 수강신청 확인 및 정정 |
+| 03/06~03/10 | 휴학 신청(2차) |
+| 03/11~03/13 | 학점포기 신청(1차) |
+| 03/27 | 학기 1/4 기준일 |
+| **04/21~04/27** | **중간시험** |
+| 05/13~05/15 | 여름 계절학기 수강신청 |
+| 06/02~06/05 | 학점포기 신청(2차) |
+| **06/09~06/15** | **기말시험** |
+| 06/15 | 종강 |

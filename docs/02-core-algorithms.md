@@ -132,6 +132,41 @@ def p(postpone_count: int) -> float:
     return min(1.0, postpone_count * 0.25)
 ```
 
+### deadline=None 처리 (2026-02-18 논의 확정)
+
+> 마감 없는 task("빨래" 등)는 **오늘 23:59 KST로 자동 설정**.
+> "오늘 할 일"로 취급. f()에서 에러 방지 + 마감 없는 task도 당일 우선순위에 반영.
+
+```python
+def _resolve_deadline(deadline_at, now, tz_kst):
+    """deadline_at이 None이면 오늘 23:59 KST로 설정."""
+    if deadline_at is not None:
+        return deadline_at
+    return now.replace(hour=23, minute=59, second=0, microsecond=0)
+```
+
+### current_energy 추정 (2026-02-18 논의 확정)
+
+> 현재는 **user_profile 시간표 기반 추정**. 
+> 향후 에너지 상태 추적 시스템(사용자에게 직접 물어보고 학습)으로 대체 예정.
+
+```python
+def estimate_current_energy(hour: int, profile: UserProfile) -> int:
+    """
+    시간대별 에너지 추정.
+    - focus_peak_hours에 포함 → 5 (최고)
+    - low_energy_hours에 포함 → 2 (낮음)
+    - 그 외 → 3 (보통)
+    
+    향후: 사용자 상태 직접 입력 + 패턴 학습으로 대체.
+    """
+    if hour in profile.focus_peak_hours:
+        return 5
+    if hour in profile.low_energy_hours:
+        return 2
+    return 3
+```
+
 ### 최종 계산 함수
 
 ```python
@@ -145,7 +180,8 @@ def calculate_priority(
     결정론적 우선순위 점수 계산.
     같은 입력 → 항상 같은 출력. 단위 테스트로 고정.
     """
-    hours_left = (task.deadline_at - now).total_seconds() / 3600
+    deadline = _resolve_deadline(task.deadline_at, now, KST)
+    hours_left = (deadline - now).total_seconds() / 3600
 
     score = (
         weights["w_deadline"]   * f(hours_left)
@@ -170,6 +206,17 @@ INVARIANT_RULES = [
     lambda task, now: 20.0 if task.deadline_at < now else None,
 ]
 ```
+
+> **참고:** 불변 규칙은 deadline_at이 None이 아닌 경우에만 적용.
+> deadline=None → 오늘 23:59 설정 후 일반 점수 계산.
+
+### 향후 학습 연동 (미구현, 문서화)
+
+| 항목 | 현재 | 향후 |
+|------|------|------|
+| current_energy | 시간표 추정 | 사용자 직접 입력 + 패턴 학습 |
+| 가중치 | 고정 (DEFAULT_WEIGHTS) | 사용자 수동 조정 피드백 → 가중치 자동 보정 |
+| 에너지 질문 | 미구현 | 블록 시작 시 "지금 상태 어때요?" → 이유까지 수집 |
 
 ---
 
